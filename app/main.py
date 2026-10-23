@@ -12,10 +12,6 @@ from app.analysis import analyze_case
 from app.insurance import analyze_insurance
 
 
-# ============================================================
-# APP
-# ============================================================
-
 app = FastAPI(
     title="DocuMend Ledger API",
     description="AI-powered medical billing and insurance document auditor",
@@ -23,45 +19,41 @@ app = FastAPI(
 )
 
 
-# ============================================================
+# ---------------------------------------------------------
 # CORS
-# Allows the Next.js frontend to communicate with FastAPI
-# ============================================================
-
+# ---------------------------------------------------------
+# Allows the deployed frontend (Vercel) and local frontend
+# to communicate with this backend.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# ============================================================
-# STORAGE
-# ============================================================
+# ---------------------------------------------------------
+# Storage
+# ---------------------------------------------------------
 
 CASES = {}
 
 UPLOAD_DIR = "uploads"
-
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-# ============================================================
-# REQUEST MODELS
-# ============================================================
+# ---------------------------------------------------------
+# Request Models
+# ---------------------------------------------------------
 
 class AskRequest(BaseModel):
     question: str
 
 
-# ============================================================
-# HEALTH
-# ============================================================
+# ---------------------------------------------------------
+# Health Check
+# ---------------------------------------------------------
 
 @app.get("/health")
 def health():
@@ -71,9 +63,9 @@ def health():
     }
 
 
-# ============================================================
-# CREATE CASE
-# ============================================================
+# ---------------------------------------------------------
+# Create Case
+# ---------------------------------------------------------
 
 @app.post("/api/cases")
 def create_case():
@@ -92,41 +84,35 @@ def create_case():
     }
 
 
-# ============================================================
-# UPLOAD DOCUMENT
-# ============================================================
+# ---------------------------------------------------------
+# Upload Document
+# ---------------------------------------------------------
 
 @app.post("/api/cases/{case_id}/documents")
 async def upload_document(
     case_id: str,
     file: UploadFile = File(...)
 ):
-
-    # Check case
     if case_id not in CASES:
         raise HTTPException(
             status_code=404,
             detail="Case not found"
         )
 
-    # Check file name
     if not file.filename:
         raise HTTPException(
             status_code=400,
             detail="No file provided"
         )
 
-    # Currently supporting PDF
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are supported"
         )
 
-    # Generate document ID
     document_id = str(uuid.uuid4())
 
-    # Protect filename
     safe_filename = os.path.basename(file.filename)
 
     stored_filename = f"{document_id}_{safe_filename}"
@@ -136,7 +122,6 @@ async def upload_document(
         stored_filename
     )
 
-    # Read uploaded file
     content = await file.read()
 
     if not content:
@@ -145,13 +130,12 @@ async def upload_document(
             detail="Uploaded file is empty"
         )
 
-    # Save file
     with open(path, "wb") as f:
         f.write(content)
 
-    # --------------------------------------------------------
-    # PDF EXTRACTION
-    # --------------------------------------------------------
+    # ---------------------------------------------
+    # Extract PDF text
+    # ---------------------------------------------
 
     try:
         pdf_data = extract_pdf(path)
@@ -162,33 +146,28 @@ async def upload_document(
             detail=f"Could not read PDF: {exc}"
         )
 
-    # Combine page text for AI extraction
     full_text = "\n".join(
         page["text"]
         for page in pdf_data["content"]
         if page.get("text")
     )
 
-    # --------------------------------------------------------
-    # AI DOCUMENT EXTRACTION
-    # --------------------------------------------------------
+    # ---------------------------------------------
+    # AI document extraction
+    # ---------------------------------------------
 
     try:
-
-        extracted_data = extract_document(
-            full_text
-        )
+        extracted_data = extract_document(full_text)
 
     except Exception as exc:
-
         extracted_data = {
             "document_type": "unknown",
             "ai_error": str(exc)
         }
 
-    # --------------------------------------------------------
-    # DOCUMENT OBJECT
-    # --------------------------------------------------------
+    # ---------------------------------------------
+    # Store document
+    # ---------------------------------------------
 
     document = {
         "id": document_id,
@@ -198,12 +177,10 @@ async def upload_document(
         "extracted_data": extracted_data,
     }
 
-    # Add document to case
-    CASES[case_id]["documents"].append(
-        document
-    )
+    CASES[case_id]["documents"].append(document)
 
-    # New document means previous analysis may be outdated
+    # Adding a document means the previous analysis
+    # is no longer guaranteed to represent the full case.
     CASES[case_id]["analysis_status"] = "needs_reanalysis"
 
     return {
@@ -212,14 +189,13 @@ async def upload_document(
     }
 
 
-# ============================================================
-# ANALYZE CASE
-# ============================================================
+# ---------------------------------------------------------
+# Analyze Case
+# ---------------------------------------------------------
 
 @app.post("/api/cases/{case_id}/analyze")
 def analyze(case_id: str):
 
-    # Check case
     if case_id not in CASES:
         raise HTTPException(
             status_code=404,
@@ -228,37 +204,30 @@ def analyze(case_id: str):
 
     case = CASES[case_id]
 
-    # Need documents
     if not case["documents"]:
         raise HTTPException(
             status_code=400,
             detail="No documents uploaded for this case"
         )
 
-    # Mark as analyzing
     case["analysis_status"] = "analyzing"
 
     try:
 
-        # ----------------------------------------------------
-        # DETERMINISTIC ANALYSIS
-        # ----------------------------------------------------
-
+        # Deterministic analysis
         findings = analyze_case(
             case["documents"]
         )
 
-        # ----------------------------------------------------
-        # INSURANCE ANALYSIS
-        # ----------------------------------------------------
-
+        # Insurance analysis
         insurance = analyze_insurance(
             case["documents"]
         )
 
-        # Save results
         case["findings"] = findings
+
         case["insurance"] = insurance
+
         case["analysis_status"] = "complete"
 
     except Exception as exc:
@@ -279,9 +248,9 @@ def analyze(case_id: str):
     }
 
 
-# ============================================================
-# GET COMPLETE CASE
-# ============================================================
+# ---------------------------------------------------------
+# Get Complete Case
+# ---------------------------------------------------------
 
 @app.get("/api/cases/{case_id}")
 def get_case(case_id: str):
@@ -304,9 +273,9 @@ def get_case(case_id: str):
     }
 
 
-# ============================================================
-# GET FINDINGS
-# ============================================================
+# ---------------------------------------------------------
+# Get Findings
+# ---------------------------------------------------------
 
 @app.get("/api/cases/{case_id}/findings")
 def get_findings(case_id: str):
@@ -319,13 +288,13 @@ def get_findings(case_id: str):
 
     return {
         "case_id": case_id,
-        "findings": CASES[case_id]["findings"],
+        "findings": CASES[case_id]["findings"]
     }
 
 
-# ============================================================
-# GET INSURANCE ANALYSIS
-# ============================================================
+# ---------------------------------------------------------
+# Get Insurance Analysis
+# ---------------------------------------------------------
 
 @app.get("/api/cases/{case_id}/insurance")
 def get_insurance(case_id: str):
@@ -338,13 +307,13 @@ def get_insurance(case_id: str):
 
     return {
         "case_id": case_id,
-        "insurance": CASES[case_id]["insurance"],
+        "insurance": CASES[case_id]["insurance"]
     }
 
 
-# ============================================================
-# ASK DOCUMEND
-# ============================================================
+# ---------------------------------------------------------
+# Ask DocuMend
+# ---------------------------------------------------------
 
 @app.post("/api/cases/{case_id}/ask")
 def ask_documend(
@@ -352,14 +321,12 @@ def ask_documend(
     request: AskRequest
 ):
 
-    # Check case
     if case_id not in CASES:
         raise HTTPException(
             status_code=404,
             detail="Case not found"
         )
 
-    # Validate question
     question = request.question.strip()
 
     if not question:
@@ -370,16 +337,15 @@ def ask_documend(
 
     case = CASES[case_id]
 
-    # Need documents
     if not case["documents"]:
         raise HTTPException(
             status_code=400,
             detail="No documents available for this case"
         )
 
-    # --------------------------------------------------------
-    # BUILD AI CONTEXT
-    # --------------------------------------------------------
+    # ---------------------------------------------
+    # Build evidence-grounded context
+    # ---------------------------------------------
 
     context = {
         "documents": [
@@ -391,22 +357,21 @@ def ask_documend(
             }
             for document in case["documents"]
         ],
+
         "findings": case["findings"],
+
         "insurance": case["insurance"],
     }
 
-    # Convert to JSON
+    # Prevent excessively large AI requests.
     context_json = json.dumps(
         context,
         ensure_ascii=False
-    )
+    )[:90000]
 
-    # Keep context within reasonable model size
-    context_json = context_json[:90000]
-
-    # --------------------------------------------------------
-    # ASK GEMINI
-    # --------------------------------------------------------
+    # ---------------------------------------------
+    # Ask Gemini
+    # ---------------------------------------------
 
     try:
 
